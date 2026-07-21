@@ -1,4 +1,133 @@
-headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+ربات نهنگ (WHALE) — نسخه‌ی ابری با ۴ سطح هوش مصنوعی
+همیشه فعال، حتی وقتی لپ‌تاپ خاموش است
+"""
+
+import asyncio
+import json
+import logging
+import os
+import random
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import aiohttp
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+
+# ==================== تنظیمات از محیط ====================
+TOKEN = os.environ.get("TOKEN", "YOUR_BOT_TOKEN")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", 123456789))
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY", "")
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+# ==================== داده‌ها ====================
+DATA_FILE = Path("whale_data.json")
+USAGE_FILE = Path("whale_usage.json")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
+# ==================== سیستم ۴ سطح ====================
+LEVELS = {
+    "free": {
+        "name": "🐟 کریل",
+        "daily_limit": 20,
+        "model": "gpt-3.5-turbo",
+        "api": "openai",
+        "prompt": "شما یک دستیار ساده هستید."
+    },
+    "plus": {
+        "name": "🐬 دلفین",
+        "daily_limit": 60,
+        "model": "gemini-1.5-flash",
+        "api": "gemini",
+        "prompt": "شما یک دستیار حرفه‌ای هستید."
+    },
+    "pro": {
+        "name": "🐋 وال",
+        "daily_limit": 50,
+        "model": "claude-3-haiku-20240307",
+        "api": "claude",
+        "prompt": "شما یک کارشناس ارشد هستید."
+    },
+    "premium": {
+        "name": "🐳 نهنگ آبی",
+        "daily_limit": 30,
+        "model": "llama3-70b-8192",
+        "api": "groq",
+        "prompt": "شما یک هوش فرازمینی هستید."
+    }
+}
+
+# ==================== توابع داده ====================
+def load_data():
+    if DATA_FILE.exists():
+        with open(DATA_FILE, "r") as f:
+            return json.load(f)
+    return {"users": {}, "invites": {}}
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+def load_usage():
+    if USAGE_FILE.exists():
+        with open(USAGE_FILE, "r") as f:
+            return json.load(f)
+    return {}
+
+def save_usage(usage):
+    with open(USAGE_FILE, "w") as f:
+        json.dump(usage, f, indent=2)
+
+def get_user_level(user_id):
+    data = load_data()
+    user = data["users"].get(user_id, {})
+    invites = data["invites"].get(user_id, 0)
+    if invites >= 10:
+        return "premium"
+    elif invites >= 5:
+        return "pro"
+    elif invites >= 2:
+        return "plus"
+    return user.get("level", "free")
+
+# ==================== APIها ====================
+async def call_ai_api(level, user_msg):
+    config = LEVELS[level]
+    api_type = config["api"]
+    model = config["model"]
+    sys_prompt = config["prompt"]
+    
+    try:
+        if api_type == "openai" and OPENAI_API_KEY:
+            return await call_openai(model, sys_prompt, user_msg)
+        elif api_type == "gemini" and GEMINI_API_KEY:
+            return await call_gemini(model, sys_prompt, user_msg)
+        elif api_type == "claude" and CLAUDE_API_KEY:
+            return await call_claude(model, sys_prompt, user_msg)
+        elif api_type == "groq" and GROQ_API_KEY:
+            return await call_groq(model, sys_prompt, user_msg)
+        else:
+            return "⚠️ کلید API تنظیم نشده. از /start استفاده کن."
+    except Exception as e:
+        logger.error(f"API error: {e}")
+        return "❌ خطا در ارتباط. بعداً امتحان کن."
+
+async def call_openai(model, sys_prompt, user_msg):
+    url = "https://api.openai.com/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": model,
         "messages": [{"role": "system", "content": sys_prompt}, {"role": "user", "content": user_msg}],
@@ -61,19 +190,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     level_info = LEVELS[level]
     
     keyboard = [
-        [InlineKeyboardButton(f":whale2: {level_info['name']}", callback_data="show_level")],
-        [InlineKeyboardButton(":bar_chart: وضعیت", callback_data="my_status")],
-        [InlineKeyboardButton(":gift: دعوت", callback_data="invite")],
-        [InlineKeyboardButton(":arrow_up: ارتقاء", callback_data="upgrade_info")]
+        [InlineKeyboardButton(f"🐋 {level_info['name']}", callback_data="show_level")],
+        [InlineKeyboardButton("📊 وضعیت", callback_data="my_status")],
+        [InlineKeyboardButton("🎁 دعوت", callback_data="invite")],
+        [InlineKeyboardButton("⬆️ ارتقاء", callback_data="upgrade_info")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f":whale: سلام {user.first_name}! من نهنگ هستم.\n"
+        f"🐳 سلام {user.first_name}! من **نهنگ** هستم.\n"
         f"سطح: {level_info['name']}\n"
         f"مدل: {level_info['model']}\n"
         f"هر پیامی بفرست، پاسخ می‌دهم.\n\n"
-        f":ocean: من روی ابر اجرا می‌شوم، پس همیشه بیدارم!",
+        f"🌊 من روی ابر اجرا می‌شوم، پس همیشه بیدارم!",
         reply_markup=reply_markup
     )
 
@@ -86,9 +215,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = load_data()
     
     if query.data == "show_level":
-13:51
-await query.edit_message_text(
-            f":whale: سطح: {level_info['name']}\n"
+        await query.edit_message_text(
+            f"🐳 سطح: {level_info['name']}\n"
             f"مدل: {level_info['model']}\n"
             f"محدودیت: {level_info['daily_limit']} پیام در روز"
         )
@@ -96,7 +224,7 @@ await query.edit_message_text(
         invites = data["invites"].get(user_id, 0)
         usage = load_usage().get(f"{user_id}_{level}_{datetime.now().date()}", 0)
         await query.edit_message_text(
-            f":bar_chart: وضعیت شما:\n"
+            f"📊 وضعیت شما:\n"
             f"سطح: {level_info['name']}\n"
             f"پیام امروز: {usage}/{level_info['daily_limit']}\n"
             f"دعوت: {invites}"
@@ -104,16 +232,16 @@ await query.edit_message_text(
     elif query.data == "invite":
         code = data["users"].get(user_id, {}).get("invite_code", "")
         await query.edit_message_text(
-            f":link: لینک دعوت:\n"
+            f"🔗 لینک دعوت:\n"
             f"https://t.me/{(await context.bot.get_me()).username}?start={code}\n\n"
             f"۲ دعوت → دلفین | ۵ → وال | ۱۰ → نهنگ آبی"
         )
     elif query.data == "upgrade_info":
         await query.edit_message_text(
-            ":arrow_up: ارتقاء با دعوت:\n"
-            ":dolphin: دلفین: ۲ دعوت\n"
-            ":whale2: وال: ۵ دعوت\n"
-            ":whale: نهنگ آبی: ۱۰ دعوت"
+            "⬆️ ارتقاء با دعوت:\n"
+            "🐬 دلفین: ۲ دعوت\n"
+            "🐋 وال: ۵ دعوت\n"
+            "🐳 نهنگ آبی: ۱۰ دعوت"
         )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -123,19 +251,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     
     level = get_user_level(user_id)
-    msg = await update.message.reply_text(":whale: نهنگ در حال فکر کردن...")
+    msg = await update.message.reply_text("🐳 نهنگ در حال فکر کردن...")
     
     try:
         response = await call_ai_api(level, user_msg)
-        await msg.edit_text(f":whale2: {LEVELS[level]['name']}:\n\n{response[:3000]}")
+        await msg.edit_text(f"🐋 {LEVELS[level]['name']}:\n\n{response[:3000]}")
     except Exception as e:
         logger.error(e)
-        await msg.edit_text(":x: خطا. دوباره تلاش کن.")
+        await msg.edit_text("❌ خطا. دوباره تلاش کن.")
 
 # ==================== اجرا ====================
 def main():
     if not TOKEN or TOKEN == "YOUR_BOT_TOKEN":
-        logger.error(":x: توکن تنظیم نشده! متغیر TOKEN را بگذار.")
+        logger.error("❌ توکن تنظیم نشده! متغیر TOKEN را بگذار.")
         sys.exit(1)
     
     app = Application.builder().token(TOKEN).build()
@@ -143,9 +271,8 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    logger.info(":whale: نهنگ به آب انداخته شد — همیشه بیدار!")
+    logger.info("🐳 نهنگ به آب انداخته شد — همیشه بیدار!")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if name == "main":
+if __name__ == "__main__":
     main()
-    
